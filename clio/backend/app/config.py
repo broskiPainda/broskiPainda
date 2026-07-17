@@ -18,6 +18,12 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     anthropic_model: str = Field(default="claude-sonnet-4-6", alias="ANTHROPIC_MODEL")
+    # Override to point at an Anthropic-compatible endpoint (e.g. z.ai's
+    # https://api.z.ai/api/anthropic for GLM models) instead of api.anthropic.com.
+    # Deliberately NOT named ANTHROPIC_BASE_URL: some hosting/dev environments
+    # (including this repo's own CI/dev shells) set that generic name as an
+    # ambient var for unrelated tooling, which would silently shadow this.
+    anthropic_base_url: str | None = Field(default=None, alias="CLIO_ANTHROPIC_BASE_URL")
 
     sqlite_path: Path = Field(default=REPO_ROOT / "data" / "clio.db", alias="SQLITE_PATH")
     chroma_path: Path = Field(default=REPO_ROOT / "data" / "chroma", alias="CHROMA_PATH")

@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.cache import router as cache_router
 from app.api.health import router as health_router
+from app.api.scenarios import router as scenarios_router
 
 app = FastAPI(
     title="CLIO",
@@ -17,6 +19,8 @@ app.add_middleware(
 )
 
 app.include_router(health_router, prefix="/api", tags=["health"])
+app.include_router(scenarios_router, prefix="/api", tags=["scenarios"])
+app.include_router(cache_router, prefix="/api", tags=["cache"])
 
 
 @app.get("/")
