@@ -3,9 +3,10 @@ import json
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
-from app.cache.db import CaseCache, ScenarioStore
+from app.cache.db import CaseCache, ReportStore, ScenarioStore
 from app.engine.pipeline import run_pipeline
 from app.engine.step1_structure import ScenarioRefusedError, structure_scenario
+from app.models.report import Report
 from app.models.scenario import (
     Scenario,
     ScenarioCreateRequest,
@@ -64,7 +65,16 @@ async def analyze_scenario(scenario_id: str):
 
     async def event_generator():
         cache = CaseCache()
+        report_store = ReportStore()
         async for event in run_pipeline(scenario, cache=cache):
+            if event["event"] == "report_ready":
+                report = Report.model_validate(event["data"])
+                report_store.save(report)
+                scenario.status = ScenarioStatus.COMPLETE
+                store.save(scenario)
+            elif event["event"] == "pipeline_error":
+                scenario.status = ScenarioStatus.CONFIRMED
+                store.save(scenario)
             yield {"event": event["event"], "data": json.dumps(event["data"])}
 
     return EventSourceResponse(event_generator())
@@ -78,15 +88,18 @@ async def get_scenario(scenario_id: str) -> Scenario:
     return scenario
 
 
-@router.get("/scenarios/{scenario_id}/report")
-async def get_report(scenario_id: str):
+@router.get("/scenarios/{scenario_id}/report", response_model=Report)
+async def get_report(scenario_id: str) -> Report:
     scenario = ScenarioStore().get(scenario_id)
     if scenario is None:
         raise HTTPException(status_code=404, detail="Scenario not found")
-    raise HTTPException(
-        status_code=501,
-        detail="Report synthesis (pipeline steps 4-7) is not yet implemented — coming in Phase 3.",
-    )
+    report = ReportStore().get_latest_for_scenario(scenario_id)
+    if report is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No report yet for this scenario — run POST /api/scenarios/{id}/analyze first.",
+        )
+    return report
 
 
 @router.get("/history")

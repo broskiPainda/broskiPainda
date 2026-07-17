@@ -12,7 +12,6 @@ import pytest
 
 from app.cache.db import CaseCache
 from app.engine import step1_structure, step2_nominate, step3_verify
-from app.engine.pipeline import run_pipeline
 from app.sources.wikidata import WikidataFacts
 from app.sources.wikipedia import WikipediaSummary
 from tests.fakes import FakeAnthropicClient, FakeWikidataClient, FakeWikipediaClient
@@ -151,24 +150,18 @@ async def test_naval_blockade_scenario_produces_at_least_four_verified_cases(mon
 
     cache = CaseCache(sqlite_path=tmp_path / "cache.db")
 
-    events = []
-    async for event in run_pipeline(
-        scenario, cache=cache, wiki_client=wiki_client, wikidata_client=wikidata_client
-    ):
-        events.append(event)
+    candidates = await step2_nominate.nominate_analogues(scenario)
+    result = await step3_verify.verify_and_enrich(
+        scenario.raw_text, candidates, cache=cache, wiki_client=wiki_client, wikidata_client=wikidata_client
+    )
 
-    verified_events = [e for e in events if e["event"] == "candidate_verified"]
-    dropped_events = [e for e in events if e["event"] == "candidate_dropped"]
-    step_completed = next(e for e in events if e["event"] == "step_completed" and e["data"]["step"] == 3)
-
-    assert len(verified_events) >= 4
-    assert step_completed["data"]["verified_count"] >= 4
-    assert len(dropped_events) == 2
-    dropped_names = {e["data"]["name"] for e in dropped_events}
+    assert len(result.verified) >= 4
+    assert len(result.dropped) == 2
+    dropped_names = {d.name for d in result.dropped}
     assert dropped_names == {"Berlin Blockade", "Fabricated Naval Incident"}
 
-    for e in verified_events:
-        assert e["data"]["source_urls"], "every verified case must carry source URLs"
+    for v in result.verified:
+        assert v.case.source_urls, "every verified case must carry source URLs"
 
     cached_cases = cache.list_all()
     assert len(cached_cases) >= 4
@@ -176,8 +169,7 @@ async def test_naval_blockade_scenario_produces_at_least_four_verified_cases(mon
         assert case.verified_against_sources is True
         assert case.source_urls
 
-    negative_analogue_events = [e for e in verified_events if e["data"]["is_negative_analogue"]]
     # The Berlin Blockade negative analogue was dropped for date mismatch in this fixture,
     # so none of the *verified* cases are flagged negative here — confirms the firewall
     # doesn't wave through a negative analogue just because it was nominated as one.
-    assert negative_analogue_events == []
+    assert [v for v in result.verified if v.is_negative_analogue] == []

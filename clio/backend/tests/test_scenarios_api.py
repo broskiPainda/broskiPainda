@@ -130,7 +130,47 @@ def test_analyze_streams_pipeline_events(client, monkeypatch):
     assert "Cuban Missile Crisis" in body
 
 
-def test_get_report_not_implemented(client, monkeypatch):
+def test_analyze_saves_report_and_completes_scenario(client, monkeypatch):
+    from app.models.report import STANDING_DISCLAIMER, Report
+
+    async def fake_structure_scenario(raw_text):
+        return _canned_scenario(status=ScenarioStatus.DRAFT)
+
+    monkeypatch.setattr("app.api.scenarios.structure_scenario", fake_structure_scenario)
+    created = client.post("/api/scenarios", json={"raw_text": "naval blockade scenario"}).json()
+
+    update_payload = {
+        "actors": created["actors"],
+        "objectives_by_actor": {},
+        "constraints": [],
+        "options": [],
+        "dimensions": created["dimensions"],
+    }
+    client.put(f"/api/scenarios/{created['id']}", json=update_payload)
+
+    report = Report(id="r1", scenario_id=created["id"], confidence_statement="moderate")
+
+    async def fake_pipeline(scenario, cache=None):
+        yield {"event": "step_started", "data": {"step": 2, "name": "nominate_analogues"}}
+        yield {"event": "report_ready", "data": report.model_dump(mode="json")}
+
+    monkeypatch.setattr("app.api.scenarios.run_pipeline", fake_pipeline)
+
+    with client.stream("POST", f"/api/scenarios/{created['id']}/analyze") as response:
+        assert response.status_code == 200
+        "".join(response.iter_text())
+
+    scenario_after = client.get(f"/api/scenarios/{created['id']}").json()
+    assert scenario_after["status"] == "complete"
+
+    fetched_report = client.get(f"/api/scenarios/{created['id']}/report")
+    assert fetched_report.status_code == 200
+    body = fetched_report.json()
+    assert body["confidence_statement"] == "moderate"
+    assert body["disclaimer"] == STANDING_DISCLAIMER
+
+
+def test_get_report_not_found_before_analysis(client, monkeypatch):
     async def fake_structure_scenario(raw_text):
         return _canned_scenario()
 
@@ -138,7 +178,7 @@ def test_get_report_not_implemented(client, monkeypatch):
     created = client.post("/api/scenarios", json={"raw_text": "naval blockade scenario"}).json()
 
     response = client.get(f"/api/scenarios/{created['id']}/report")
-    assert response.status_code == 501
+    assert response.status_code == 404
 
 
 def test_history_lists_created_scenarios(client, monkeypatch):

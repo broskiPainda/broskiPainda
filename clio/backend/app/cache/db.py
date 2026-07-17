@@ -12,6 +12,7 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from app.config import get_settings
 from app.models.case import StructuredCase
+from app.models.report import Report
 from app.models.scenario import Scenario
 
 
@@ -39,6 +40,15 @@ class ScenarioRecord(SQLModel, table=True):
     scenario_json: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ReportRecord(SQLModel, table=True):
+    __tablename__ = "reports"
+
+    id: str = Field(primary_key=True)
+    scenario_id: str = Field(index=True)
+    report_json: str
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 _engine = None
@@ -154,3 +164,39 @@ class ScenarioStore:
         with Session(self.engine) as session:
             rows = session.exec(select(ScenarioRecord).order_by(ScenarioRecord.created_at.desc())).all()
         return [Scenario.model_validate_json(row.scenario_json) for row in rows]
+
+
+class ReportStore:
+    def __init__(self, sqlite_path: Path | None = None):
+        self.engine = get_engine(sqlite_path)
+
+    def save(self, report: Report) -> None:
+        with Session(self.engine) as session:
+            existing = session.get(ReportRecord, report.id)
+            payload = report.model_dump_json()
+            if existing:
+                existing.report_json = payload
+                session.add(existing)
+            else:
+                session.add(
+                    ReportRecord(id=report.id, scenario_id=report.scenario_id, report_json=payload)
+                )
+            session.commit()
+
+    def get(self, report_id: str) -> Report | None:
+        with Session(self.engine) as session:
+            row = session.get(ReportRecord, report_id)
+        if row is None:
+            return None
+        return Report.model_validate_json(row.report_json)
+
+    def get_latest_for_scenario(self, scenario_id: str) -> Report | None:
+        with Session(self.engine) as session:
+            row = session.exec(
+                select(ReportRecord)
+                .where(ReportRecord.scenario_id == scenario_id)
+                .order_by(ReportRecord.generated_at.desc())
+            ).first()
+        if row is None:
+            return None
+        return Report.model_validate_json(row.report_json)
