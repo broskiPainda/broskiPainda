@@ -10,6 +10,7 @@ from app.models.scenario import Scenario, ScenarioDimensions, ScenarioStatus
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("CHROMA_PATH", str(tmp_path / "chroma"))
     get_settings.cache_clear()
     reset_engine_cache()
 

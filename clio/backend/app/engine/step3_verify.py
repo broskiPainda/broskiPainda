@@ -264,9 +264,14 @@ async def verify_and_enrich(
 
     result = VerificationResult()
 
+    def _lookup_cached(candidate: NominatedCandidate) -> StructuredCase | None:
+        # Exact normalized-name match first; falls back to the semantic index for
+        # near-duplicate phrasings the exact match misses (best-effort, see semantic.py).
+        return cache.get_by_name(candidate.name) or cache.find_semantic_duplicate(candidate.name)
+
     try:
         for candidate in candidates:
-            cached_case = cache.get_by_name(candidate.name)
+            cached_case = _lookup_cached(candidate)
             if cached_case is not None:
                 result.verified.append(
                     VerifiedCandidate(
@@ -276,7 +281,7 @@ async def verify_and_enrich(
                     )
                 )
 
-        remaining = [c for c in candidates if cache.get_by_name(c.name) is None]
+        remaining = [c for c in candidates if _lookup_cached(c) is None]
 
         fetch_results = await asyncio.gather(
             *[_fetch_grounding(c, wiki_client, wikidata_client) for c in remaining]

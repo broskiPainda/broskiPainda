@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from app.cache.db import CaseCache
+from app.cache.db import CaseCache, CostLogStore
 from app.engine import step2_nominate, step3_verify, step4_similarity, step6_counterfactuals, step7_synthesis
 from app.engine.pipeline import run_pipeline
 from app.models.case import Actor, ActorRole
@@ -161,6 +161,7 @@ async def test_full_pipeline_produces_complete_report(monkeypatch, tmp_path, cow
 
     cache = CaseCache(sqlite_path=tmp_path / "cache.db")
     cow_client = CoWDataClient(sqlite_path=cow_db)
+    cost_log_store = CostLogStore(sqlite_path=tmp_path / "cache.db")
 
     events = []
     async for event in run_pipeline(
@@ -169,6 +170,7 @@ async def test_full_pipeline_produces_complete_report(monkeypatch, tmp_path, cow
         wiki_client=wiki_client,
         wikidata_client=wikidata_client,
         cow_client=cow_client,
+        cost_log_store=cost_log_store,
     ):
         events.append(event)
 

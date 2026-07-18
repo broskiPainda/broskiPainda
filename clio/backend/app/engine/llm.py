@@ -10,12 +10,23 @@ or validation failure, we retry with the error fed back to the model.
 """
 from typing import TypeVar
 
+import anthropic
 from anthropic import AsyncAnthropic
 from pydantic import BaseModel, ValidationError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import get_settings
+from app.engine.cost_tracking import record_usage
 
 T = TypeVar("T", bound=BaseModel)
+
+# Transient errors worth retrying with backoff, distinct from the validation-failure
+# retry loop below (which re-prompts the model rather than just resending).
+_TRANSIENT_ERRORS = (
+    anthropic.APIConnectionError,
+    anthropic.RateLimitError,
+    anthropic.InternalServerError,
+)
 
 _EMIT_TOOL_NAME = "emit_result"
 
@@ -30,6 +41,16 @@ def get_client() -> AsyncAnthropic:
     if settings.anthropic_base_url:
         kwargs["base_url"] = settings.anthropic_base_url
     return AsyncAnthropic(**kwargs)
+
+
+@retry(
+    retry=retry_if_exception_type(_TRANSIENT_ERRORS),
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=1, min=1, max=20),
+    reraise=True,
+)
+async def _create_with_backoff(client: AsyncAnthropic, **kwargs):
+    return await client.messages.create(**kwargs)
 
 
 async def structured_call(
@@ -59,7 +80,8 @@ async def structured_call(
 
     try:
         for attempt in range(max_retries + 1):
-            response = await active_client.messages.create(
+            response = await _create_with_backoff(
+                active_client,
                 model=model_name,
                 max_tokens=max_tokens,
                 system=system,
@@ -67,6 +89,9 @@ async def structured_call(
                 tools=[tool],
                 tool_choice={"type": "tool", "name": _EMIT_TOOL_NAME},
             )
+
+            if getattr(response, "usage", None) is not None:
+                record_usage(model_name, response.usage.input_tokens, response.usage.output_tokens)
 
             tool_use_block = next(
                 (block for block in response.content if getattr(block, "type", None) == "tool_use"),

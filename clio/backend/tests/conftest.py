@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key-not-real")
 os.environ.setdefault("CLIO_CONTACT_EMAIL", "test@example.com")
+
+# Safety net: any test that constructs CaseCache()/ScenarioStore()/etc. with default paths
+# (no explicit sqlite_path/chroma_path) must never touch the real project's data/ directory.
+# Individual tests that need an isolated per-test path still pass tmp_path explicitly and
+# take precedence via monkeypatch; this just sets the process-wide fallback.
+_TEST_DATA_DIR = Path(tempfile.gettempdir()) / "clio-test-data"
+os.environ.setdefault("SQLITE_PATH", str(_TEST_DATA_DIR / "clio-test.db"))
+os.environ.setdefault("CHROMA_PATH", str(_TEST_DATA_DIR / "chroma"))
 
 
 @pytest.fixture(autouse=True)

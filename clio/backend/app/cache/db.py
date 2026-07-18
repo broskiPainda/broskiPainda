@@ -5,11 +5,12 @@ happens before any fetch/structuring work, so a repeat scenario referencing
 "the Cuban Missile Crisis" doesn't re-fetch and re-structure it).
 """
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
+from app.cache.semantic import SemanticCaseIndex
 from app.config import get_settings
 from app.models.case import StructuredCase
 from app.models.report import Report
@@ -51,6 +52,19 @@ class ReportRecord(SQLModel, table=True):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class CostLogRecord(SQLModel, table=True):
+    __tablename__ = "cost_logs"
+
+    id: int | None = Field(default=None, primary_key=True)
+    scenario_id: str = Field(index=True)
+    report_id: str | None = Field(default=None, index=True)
+    call_count: int
+    input_tokens: int
+    output_tokens: int
+    estimated_cost_usd: float
+    logged_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 _engine = None
 
 
@@ -74,8 +88,14 @@ def reset_engine_cache() -> None:
 
 
 class CaseCache:
-    def __init__(self, sqlite_path: Path | None = None):
+    def __init__(self, sqlite_path: Path | None = None, chroma_path: Path | None = None):
         self.engine = get_engine(sqlite_path)
+        # When a caller passes an explicit sqlite_path (tests, or a custom deployment) but no
+        # chroma_path, default the semantic index alongside it rather than to the global
+        # settings path — otherwise every test run would write into the real project's
+        # data/chroma/ directory.
+        resolved_chroma_path = chroma_path or (sqlite_path.parent / "chroma" if sqlite_path else None)
+        self._semantic = SemanticCaseIndex(chroma_path=resolved_chroma_path)
 
     def get_by_name(self, name: str) -> StructuredCase | None:
         normalized = normalize_case_name(name)
@@ -86,6 +106,18 @@ class CaseCache:
         if row is None:
             return None
         return StructuredCase.model_validate_json(row.case_json)
+
+    def find_semantic_duplicate(self, name: str, summary: str = "") -> StructuredCase | None:
+        """Catches near-duplicate names the exact normalized-name lookup misses (e.g. Claude
+        nominating slightly different phrasings of the same case across scenarios). Best-effort
+        — returns None if the semantic index is unavailable for any reason."""
+        matches = self._semantic.find_similar(name, summary)
+        for case_id, _matched_name, _distance in matches:
+            with Session(self.engine) as session:
+                row = session.exec(select(CachedCase).where(CachedCase.id == case_id)).first()
+            if row is not None:
+                return StructuredCase.model_validate_json(row.case_json)
+        return None
 
     def put(self, case: StructuredCase) -> None:
         normalized = normalize_case_name(case.name)
@@ -109,6 +141,7 @@ class CaseCache:
                     )
                 )
             session.commit()
+        self._semantic.add(case.id, case.name, case.summary)
 
     def list_all(self) -> list[StructuredCase]:
         with Session(self.engine) as session:
@@ -122,7 +155,38 @@ class CaseCache:
                 return False
             session.delete(row)
             session.commit()
-            return True
+        self._semantic.delete(case_id)
+        return True
+
+    def evict_stale(self, max_age_days: int = 90) -> int:
+        """Delete cases not refreshed in over max_age_days. Cases are cached transiently
+        (see docs/ARCHITECTURE.md) — this keeps the cache from growing unbounded and
+        ensures old cases eventually get re-fetched/re-verified against current sources."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        with Session(self.engine) as session:
+            rows = session.exec(select(CachedCase).where(CachedCase.cached_at < cutoff)).all()
+            ids = [row.id for row in rows]
+            for row in rows:
+                session.delete(row)
+            session.commit()
+        for case_id in ids:
+            self._semantic.delete(case_id)
+        return len(ids)
+
+    def evict_lru(self, max_entries: int = 1000) -> int:
+        """Cap total cache size, evicting the least-recently-cached entries first."""
+        with Session(self.engine) as session:
+            total = session.exec(select(CachedCase)).all()
+            if len(total) <= max_entries:
+                return 0
+            overflow = sorted(total, key=lambda r: r.cached_at)[: len(total) - max_entries]
+            ids = [row.id for row in overflow]
+            for row in overflow:
+                session.delete(row)
+            session.commit()
+        for case_id in ids:
+            self._semantic.delete(case_id)
+        return len(ids)
 
 
 class ScenarioStore:
@@ -200,3 +264,32 @@ class ReportStore:
         if row is None:
             return None
         return Report.model_validate_json(row.report_json)
+
+
+class CostLogStore:
+    def __init__(self, sqlite_path: Path | None = None):
+        self.engine = get_engine(sqlite_path)
+
+    def log(self, scenario_id: str, report_id: str | None, summary: dict) -> None:
+        with Session(self.engine) as session:
+            session.add(
+                CostLogRecord(
+                    scenario_id=scenario_id,
+                    report_id=report_id,
+                    call_count=summary["call_count"],
+                    input_tokens=summary["input_tokens"],
+                    output_tokens=summary["output_tokens"],
+                    estimated_cost_usd=summary["estimated_cost_usd"],
+                )
+            )
+            session.commit()
+
+    def list_for_scenario(self, scenario_id: str) -> list[CostLogRecord]:
+        with Session(self.engine) as session:
+            return list(
+                session.exec(
+                    select(CostLogRecord)
+                    .where(CostLogRecord.scenario_id == scenario_id)
+                    .order_by(CostLogRecord.logged_at.desc())
+                ).all()
+            )

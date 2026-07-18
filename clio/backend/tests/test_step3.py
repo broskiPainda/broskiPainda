@@ -158,3 +158,58 @@ async def test_verify_and_enrich_uses_cache_on_second_call(monkeypatch, tmp_path
     assert len(result2.verified) == 1
     assert result2.verified[0].from_cache is True
     assert call_count["n"] == 1  # no additional LLM call on cache hit
+
+
+@pytest.mark.asyncio
+async def test_verify_and_enrich_finds_semantic_duplicate_by_differently_phrased_name(monkeypatch, tmp_path):
+    """A later nomination phrasing the same case slightly differently (different exact
+    normalized-name slug) should still hit the cache via the semantic index rather than
+    re-fetching and re-structuring from scratch."""
+    original = NominatedCandidate(
+        name="Cuban Missile Crisis",
+        approximate_dates="1962",
+        structural_rationale="naval quarantine",
+        wikipedia_title="Cuban Missile Crisis",
+    )
+    rephrased = NominatedCandidate(
+        name="The Cuban Missile Crisis of 1962",
+        approximate_dates="1962",
+        structural_rationale="naval quarantine",
+        wikipedia_title="Cuban Missile Crisis",
+    )
+    wiki_client = FakeWikipediaClient(
+        summaries={
+            "Cuban Missile Crisis": WikipediaSummary(
+                title="Cuban Missile Crisis",
+                extract="A 1962 Cold War confrontation.",
+                content_urls_desktop="https://en.wikipedia.org/wiki/Cuban_Missile_Crisis",
+            )
+        }
+    )
+    wikidata_client = FakeWikidataClient(
+        facts={"Cuban Missile Crisis": WikidataFacts(qid="Q128736", label="Cuban Missile Crisis", start_date="1962-10-16")}
+    )
+    llm_client = FakeAnthropicClient([("Cuban Missile Crisis", _structuring_output("Cuban Missile Crisis"))])
+    call_count = {"n": 0}
+
+    async def fake_structured_call(system, user, response_model, **kwargs):
+        call_count["n"] += 1
+        from app.engine.llm import structured_call as real_call
+
+        return await real_call(system, user, response_model, client=llm_client)
+
+    monkeypatch.setattr(step3_verify, "structured_call", fake_structured_call)
+
+    cache = CaseCache(sqlite_path=tmp_path / "cache.db")
+    await step3_verify.verify_and_enrich(
+        SCENARIO_TEXT, [original], cache=cache, wiki_client=wiki_client, wikidata_client=wikidata_client
+    )
+    assert call_count["n"] == 1
+
+    result = await step3_verify.verify_and_enrich(
+        SCENARIO_TEXT, [rephrased], cache=cache, wiki_client=wiki_client, wikidata_client=wikidata_client
+    )
+
+    assert len(result.verified) == 1
+    assert result.verified[0].from_cache is True
+    assert call_count["n"] == 1  # semantic dedup avoided a second structuring call
