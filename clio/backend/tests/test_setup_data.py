@@ -70,6 +70,22 @@ def test_load_mids_still_picks_up_state_column_when_present():
     assert row == ("USA",)
 
 
+def test_load_mids_picks_up_real_midb_5_0_stabb_column():
+    """Header taken from an actual MIDB_5.0.csv download — the dyadic file
+    uses `stabb`, not `stateabb`, and has no `outcome` column at all (that's
+    dispute-level, MIDA-only) — outcome should end up NULL, not crash."""
+    conn = _conn_with_tables()
+    csv_text = (
+        "dispnum,stabb,ccode,stday,stmon,styear,endday,endmon,endyear,sidea,revstate,"
+        "revtype1,revtype2,fatality,fatalpre,hiact,hostlev,orig,version\n"
+        "2,ITA,325,-9,7,1902,24,1,1903,1,0,0,0,0,0,7,3,1,5\n"
+    )
+    n = setup_data.load_mids(conn, csv_text)
+    assert n == 1
+    row = conn.execute("SELECT dispute_number, side_a_state, start_year, hostility_level, outcome FROM cow_mids").fetchone()
+    assert row == (2, "ITA", 1902, 3, None)
+
+
 def test_load_wars_parses_real_intra_state_v5_1_format():
     """Header/row taken from an actual INTRA-STATE_WARS_v5.1_CSV.csv download —
     note StartYr1/EndYr1, not StartYear1/EndYear1 (that's the v4.0 Inter-State

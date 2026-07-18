@@ -138,13 +138,13 @@ def load_mids(conn: sqlite3.Connection, csv_text: str) -> int:
     for row in reader:
         try:
             dispute_number = int(_get(row, "dispnum", "dispnum3"))
-            start_year = int(_get(row, "styear", "styear"))
+            start_year = int(_get(row, "styear"))
         except (TypeError, ValueError):
             continue
         rows.append(
             (
                 dispute_number,
-                (_get(row, "stateabb") or "").strip(),
+                (_get(row, "stateabb", "stabb") or "").strip(),
                 "",
                 start_year,
                 _int_or_none(_get(row, "endyear")),
