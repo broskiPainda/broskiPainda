@@ -214,6 +214,15 @@ def main() -> int:
     any_loaded = False
 
     for name, spec in DATASETS.items():
+        manual_csv_path = settings.cow_data_dir / f"{name}.csv"
+        if manual_csv_path.exists():
+            print(f"Found manually-placed {manual_csv_path}, loading it directly.")
+            csv_text = manual_csv_path.read_text(encoding="utf-8", errors="replace")
+            n = loaders[name](conn, csv_text)
+            print(f"  loaded {n} rows from {manual_csv_path.name} into cow_{name}")
+            any_loaded = any_loaded or n > 0
+            continue
+
         print(f"Fetching {name} from {spec['url']} ...")
         cache_path = settings.cow_data_dir / f"{name}.zip"
         if cache_path.exists():
@@ -235,7 +244,7 @@ def main() -> int:
 
         csv_name, csv_text = found
         # Save raw CSV alongside the zip for transparency / manual inspection.
-        (settings.cow_data_dir / f"{name}.csv").write_text(csv_text, encoding="utf-8")
+        manual_csv_path.write_text(csv_text, encoding="utf-8")
 
         n = loaders[name](conn, csv_text)
         print(f"  loaded {n} rows from {csv_name} into cow_{name}")
