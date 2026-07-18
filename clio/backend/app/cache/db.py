@@ -13,6 +13,7 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 from app.cache.semantic import SemanticCaseIndex
 from app.config import get_settings
 from app.models.case import StructuredCase
+from app.models.event import EventAnalysisReport, EventQuery
 from app.models.report import Report
 from app.models.scenario import Scenario
 
@@ -56,6 +57,8 @@ class CostLogRecord(SQLModel, table=True):
     __tablename__ = "cost_logs"
 
     id: int | None = Field(default=None, primary_key=True)
+    # Holds either a scenario id or an event_query id, depending on which pipeline logged it —
+    # both are opaque string ids, and cost logs don't otherwise need to know which mode ran.
     scenario_id: str = Field(index=True)
     report_id: str | None = Field(default=None, index=True)
     call_count: int
@@ -63,6 +66,25 @@ class CostLogRecord(SQLModel, table=True):
     output_tokens: int
     estimated_cost_usd: float
     logged_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class EventQueryRecord(SQLModel, table=True):
+    __tablename__ = "event_queries"
+
+    id: str = Field(primary_key=True)
+    raw_text: str
+    status: str
+    event_query_json: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class EventReportRecord(SQLModel, table=True):
+    __tablename__ = "event_reports"
+
+    id: str = Field(primary_key=True)
+    event_query_id: str = Field(index=True)
+    report_json: str
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 _engine = None
@@ -293,3 +315,69 @@ class CostLogStore:
                     .order_by(CostLogRecord.logged_at.desc())
                 ).all()
             )
+
+
+class EventQueryStore:
+    def __init__(self, sqlite_path: Path | None = None):
+        self.engine = get_engine(sqlite_path)
+
+    def save(self, event_query: EventQuery) -> None:
+        with Session(self.engine) as session:
+            existing = session.get(EventQueryRecord, event_query.id)
+            payload = event_query.model_dump_json()
+            if existing:
+                existing.raw_text = event_query.raw_text
+                existing.status = event_query.status.value
+                existing.event_query_json = payload
+                session.add(existing)
+            else:
+                session.add(
+                    EventQueryRecord(
+                        id=event_query.id,
+                        raw_text=event_query.raw_text,
+                        status=event_query.status.value,
+                        event_query_json=payload,
+                    )
+                )
+            session.commit()
+
+    def get(self, event_query_id: str) -> EventQuery | None:
+        with Session(self.engine) as session:
+            row = session.get(EventQueryRecord, event_query_id)
+        if row is None:
+            return None
+        return EventQuery.model_validate_json(row.event_query_json)
+
+    def list_all(self) -> list[EventQuery]:
+        with Session(self.engine) as session:
+            rows = session.exec(select(EventQueryRecord).order_by(EventQueryRecord.created_at.desc())).all()
+        return [EventQuery.model_validate_json(row.event_query_json) for row in rows]
+
+
+class EventReportStore:
+    def __init__(self, sqlite_path: Path | None = None):
+        self.engine = get_engine(sqlite_path)
+
+    def save(self, report: EventAnalysisReport) -> None:
+        with Session(self.engine) as session:
+            existing = session.get(EventReportRecord, report.id)
+            payload = report.model_dump_json()
+            if existing:
+                existing.report_json = payload
+                session.add(existing)
+            else:
+                session.add(
+                    EventReportRecord(id=report.id, event_query_id=report.event_query_id, report_json=payload)
+                )
+            session.commit()
+
+    def get_latest_for_event(self, event_query_id: str) -> EventAnalysisReport | None:
+        with Session(self.engine) as session:
+            row = session.exec(
+                select(EventReportRecord)
+                .where(EventReportRecord.event_query_id == event_query_id)
+                .order_by(EventReportRecord.generated_at.desc())
+            ).first()
+        if row is None:
+            return None
+        return EventAnalysisReport.model_validate_json(row.report_json)

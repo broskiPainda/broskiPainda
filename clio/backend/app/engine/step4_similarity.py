@@ -1,12 +1,14 @@
 """Step 4 — Similarity scoring.
 
-Weighted dimension overlap between the scenario and each verified case.
-Claude classifies each of the 12 dimensions as matched or mismatched
-(dimension values are free text, so this needs judgment, not string
-equality); the weighting and ranking themselves are deterministic Python
-using DEFAULT_DIMENSION_WEIGHTS. Top 5 by weighted score are kept, plus the
-negative analogue (if verified) even if it doesn't rank in the top 5 —
-mismatches are surfaced prominently ("where this analogy breaks down").
+Weighted dimension overlap between a reference (a hypothetical scenario, OR
+in the event-analysis mode, an already-verified primary historical case)
+and each verified candidate case. Claude classifies each of the 12
+dimensions as matched or mismatched (dimension values are free text, so
+this needs judgment, not string equality); the weighting and ranking
+themselves are deterministic Python using DEFAULT_DIMENSION_WEIGHTS. Top 5
+by weighted score are kept, plus the negative analogue (if verified) even
+if it doesn't rank in the top 5 — mismatches are surfaced prominently
+("where this analogy breaks down").
 """
 import asyncio
 
@@ -14,16 +16,18 @@ from pydantic import BaseModel, Field
 
 from app.engine.llm import structured_call
 from app.engine.step3_verify import VerifiedCandidate
+from app.models.case import StructuredCase
 from app.models.dimensions import DEFAULT_DIMENSION_WEIGHTS, Dimension
 from app.models.report import MatchedCase
 from app.models.scenario import Scenario
 
-SYSTEM_PROMPT = """You are comparing a decision scenario to a historical case, dimension by \
-dimension, for analogical-reasoning purposes. For EACH of the 12 structural dimensions, decide \
-whether the scenario's value and the historical case's value describe a materially similar \
-structural situation (matches=true) or a materially different one (matches=false). Be \
-discriminating — superficial wording overlap is not enough; judge whether the underlying \
-structural situation matches. Give a one-sentence note explaining your call for each dimension."""
+SYSTEM_PROMPT = """You are comparing a reference decision (a scenario, or a real historical \
+case) to a candidate historical case, dimension by dimension, for analogical-reasoning \
+purposes. For EACH of the 12 structural dimensions, decide whether the reference's value and \
+the candidate case's value describe a materially similar structural situation (matches=true) or \
+a materially different one (matches=false). Be discriminating — superficial wording overlap is \
+not enough; judge whether the underlying structural situation matches. Give a one-sentence note \
+explaining your call for each dimension."""
 
 
 class DimensionMatch(BaseModel):
@@ -57,13 +61,20 @@ def _weighted_score(matches: list[DimensionMatch]) -> tuple[float, list[Dimensio
     return score, matched, mismatched
 
 
-async def _score_case(scenario: Scenario, candidate: VerifiedCandidate) -> MatchedCase:
-    scenario_dims = scenario.dimensions.as_dict()
+async def _score_against_reference(
+    reference_label: str,
+    reference_dims: dict[Dimension, str],
+    candidate: VerifiedCandidate,
+) -> MatchedCase:
     case_dims = candidate.case.dimensions.as_dict()
-    lines = []
-    for dim in Dimension:
-        lines.append(f"- {dim.value}: scenario={scenario_dims.get(dim, '')!r} | case={case_dims.get(dim, '')!r}")
-    user_prompt = f"Scenario: {scenario.raw_text}\nCase: {candidate.case.name} ({candidate.case.dates})\n\n" + "\n".join(lines)
+    lines = [
+        f"- {dim.value}: reference={reference_dims.get(dim, '')!r} | case={case_dims.get(dim, '')!r}"
+        for dim in Dimension
+    ]
+    user_prompt = (
+        f"Reference: {reference_label}\nCase: {candidate.case.name} ({candidate.case.dates})\n\n"
+        + "\n".join(lines)
+    )
 
     result = await structured_call(
         system=SYSTEM_PROMPT,
@@ -80,13 +91,18 @@ async def _score_case(scenario: Scenario, candidate: VerifiedCandidate) -> Match
     )
 
 
-async def score_similarity(
-    scenario: Scenario, candidates: list[VerifiedCandidate], top_n: int = 5
+async def _score_and_rank(
+    reference_label: str,
+    reference_dims: dict[Dimension, str],
+    candidates: list[VerifiedCandidate],
+    top_n: int,
 ) -> list[MatchedCase]:
     if not candidates:
         return []
 
-    scored = await asyncio.gather(*[_score_case(scenario, c) for c in candidates])
+    scored = await asyncio.gather(
+        *[_score_against_reference(reference_label, reference_dims, c) for c in candidates]
+    )
     ranked = sorted(scored, key=lambda m: m.similarity_score, reverse=True)
 
     top = ranked[:top_n]
@@ -97,3 +113,16 @@ async def score_similarity(
         top.append(negative)
 
     return top
+
+
+async def score_similarity(
+    scenario: Scenario, candidates: list[VerifiedCandidate], top_n: int = 5
+) -> list[MatchedCase]:
+    return await _score_and_rank(scenario.raw_text, scenario.dimensions.as_dict(), candidates, top_n)
+
+
+async def score_similarity_against_case(
+    primary_case: StructuredCase, candidates: list[VerifiedCandidate], top_n: int = 5
+) -> list[MatchedCase]:
+    label = f"{primary_case.name} ({primary_case.dates}): {primary_case.summary}"
+    return await _score_and_rank(label, primary_case.dimensions.as_dict(), candidates, top_n)

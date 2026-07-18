@@ -60,16 +60,43 @@ export function getHealth() {
   return fetch(`${BASE}/health`).then(handle);
 }
 
+// --- Historical-event-analysis mode ---
+
+export function createEventQuery(rawText) {
+  return fetch(`${BASE}/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ raw_text: rawText }),
+  }).then(handle);
+}
+
+export function getEventQuery(id) {
+  return fetch(`${BASE}/events/${id}`).then(handle);
+}
+
+export function getEventReport(id) {
+  return fetch(`${BASE}/events/${id}/report`).then(handle);
+}
+
+export function listEventHistory() {
+  return fetch(`${BASE}/event-history`).then(handle);
+}
+
+export function streamEventAnalysis(eventQueryId, opts) {
+  return streamSse(`${BASE}/events/${eventQueryId}/analyze`, opts);
+}
+
 /**
  * Streams POST /api/scenarios/{id}/analyze as parsed SSE events. Native
  * EventSource can't send a POST body/method, so this parses the
  * text/event-stream response manually from a fetch() ReadableStream.
  */
-export async function* streamAnalysis(scenarioId, { signal } = {}) {
-  const response = await fetch(`${BASE}/scenarios/${scenarioId}/analyze`, {
-    method: "POST",
-    signal,
-  });
+export function streamAnalysis(scenarioId, opts) {
+  return streamSse(`${BASE}/scenarios/${scenarioId}/analyze`, opts);
+}
+
+async function* streamSse(url, { signal } = {}) {
+  const response = await fetch(url, { method: "POST", signal });
   if (!response.ok || !response.body) {
     throw new Error(`Analysis stream failed to start (HTTP ${response.status})`);
   }

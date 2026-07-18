@@ -13,6 +13,12 @@ from app.models.case import (
 )
 from app.models.counterfactual import Counterfactual, Plausibility
 from app.models.dimensions import ALL_DIMENSIONS, DEFAULT_DIMENSION_WEIGHTS, Dimension
+from app.models.event import (
+    EventAnalysisReport,
+    EventQuery,
+    EventQueryCreateRequest,
+    EventQueryStatus,
+)
 from app.models.report import (
     STANDING_DISCLAIMER,
     BaseRateRow,
@@ -49,6 +55,10 @@ __all__ = [
     "ALL_DIMENSIONS",
     "DEFAULT_DIMENSION_WEIGHTS",
     "Dimension",
+    "EventAnalysisReport",
+    "EventQuery",
+    "EventQueryCreateRequest",
+    "EventQueryStatus",
     "STANDING_DISCLAIMER",
     "BaseRateRow",
     "BaseRateTable",

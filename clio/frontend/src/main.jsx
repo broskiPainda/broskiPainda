@@ -6,6 +6,7 @@ import App from "./App.jsx";
 import "./index.css";
 import AnalysisView from "./pages/AnalysisView.jsx";
 import CaseCache from "./pages/CaseCache.jsx";
+import EventAnalysisView from "./pages/EventAnalysisView.jsx";
 import History from "./pages/History.jsx";
 import ScenarioInput from "./pages/ScenarioInput.jsx";
 
@@ -16,6 +17,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <Route path="/" element={<App />}>
           <Route index element={<ScenarioInput />} />
           <Route path="analysis/:scenarioId" element={<AnalysisView />} />
+          <Route path="event-analysis/:eventQueryId" element={<EventAnalysisView />} />
           <Route path="cache" element={<CaseCache />} />
           <Route path="history" element={<History />} />
         </Route>

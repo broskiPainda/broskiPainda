@@ -1,12 +1,22 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { createScenario, updateScenario } from "../api.js";
+import { createEventQuery, createScenario, updateScenario } from "../api.js";
 import DimensionChips from "../components/DimensionChips.jsx";
 
 const ROLE_LABELS = { initiator: "Initiator", target: "Target", third_party: "Third party" };
 
 export default function ScenarioInput() {
+  return (
+    <div className="max-w-3xl mx-auto space-y-12">
+      <ScenarioBox />
+      <hr className="border-parchment/15" />
+      <HistoricalEventBox />
+    </div>
+  );
+}
+
+function ScenarioBox() {
   const navigate = useNavigate();
   const [rawText, setRawText] = useState("");
   const [scenario, setScenario] = useState(null);
@@ -83,11 +93,11 @@ export default function ScenarioInput() {
 
   if (!scenario) {
     return (
-      <section className="max-w-2xl mx-auto">
-        <h1 className="font-display text-2xl mb-2">Describe a scenario</h1>
+      <section>
+        <h1 className="font-display text-2xl mb-2">Analyze a scenario</h1>
         <p className="text-sm text-parchment/60 mb-4">
-          Strategic-political level only — CLIO will decline operational or tactical military
-          planning requests.
+          A hypothetical or ongoing decision. Strategic-political level only — CLIO will decline
+          operational or tactical military planning requests.
         </p>
         <form onSubmit={handleSubmit} className="space-y-3">
           <textarea
@@ -110,7 +120,7 @@ export default function ScenarioInput() {
   }
 
   return (
-    <section className="max-w-3xl mx-auto space-y-6">
+    <section className="space-y-6">
       <div>
         <h1 className="font-display text-2xl mb-1">Here's how I understood your scenario</h1>
         <p className="text-sm text-parchment/60">Review and edit before analysis — garbage in, garbage out.</p>
@@ -198,6 +208,110 @@ export default function ScenarioInput() {
       >
         {loading ? "Starting analysis…" : "Confirm & Analyze"}
       </button>
+    </section>
+  );
+}
+
+function HistoricalEventBox() {
+  const navigate = useNavigate();
+  const [rawText, setRawText] = useState("");
+  const [eventQuery, setEventQuery] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!rawText.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const created = await createEventQuery(rawText);
+      setEventQuery(created);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleAnalyze() {
+    navigate(`/event-analysis/${eventQuery.id}`);
+  }
+
+  function handleTryAgain() {
+    setEventQuery(null);
+    setError(null);
+  }
+
+  return (
+    <section>
+      <h1 className="font-display text-2xl mb-2">Analyze a historical decision</h1>
+      <p className="text-sm text-parchment/60 mb-4">
+        Something that actually happened — e.g. "the US backing the Mujahideen as a proxy
+        against the USSR in Afghanistan." CLIO will research it, judge the decision quality
+        given information available at the time, and surface what could have changed the
+        effects.
+      </p>
+
+      {!eventQuery && (
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <textarea
+            className="w-full h-32 bg-transparent border border-parchment/30 rounded p-3 text-sm outline-none focus:border-parchment/60"
+            placeholder="e.g. The USA backed the Mujahideen as a proxy against the USSR in Afghanistan."
+            value={rawText}
+            onChange={(e) => setRawText(e.target.value)}
+          />
+          {error && <p className="text-sm text-red-300">{error}</p>}
+          <button
+            type="submit"
+            disabled={loading || !rawText.trim()}
+            className="border border-parchment/40 rounded px-4 py-2 text-sm hover:bg-parchment/10 disabled:opacity-40"
+          >
+            {loading ? "Identifying…" : "Identify event"}
+          </button>
+        </form>
+      )}
+
+      {eventQuery && eventQuery.status === "not_found" && (
+        <div className="border border-amber-400/30 rounded p-4 space-y-2">
+          <p className="text-sm text-amber-300">
+            Couldn't resolve this to one specific, verifiable event: {eventQuery.not_found_reason}
+          </p>
+          <button
+            type="button"
+            onClick={handleTryAgain}
+            className="text-xs underline text-parchment/60 hover:text-parchment"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+
+      {eventQuery && eventQuery.status === "identified" && (
+        <div className="border border-parchment/20 rounded p-4 space-y-3">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-parchment/50">Resolved to</p>
+            <p className="text-lg font-display">{eventQuery.resolved_name}</p>
+            <p className="text-sm text-parchment/60">{eventQuery.resolved_dates}</p>
+          </div>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={handleAnalyze}
+              className="border border-parchment/40 rounded px-4 py-2 text-sm hover:bg-parchment/10"
+            >
+              Analyze this event
+            </button>
+            <button
+              type="button"
+              onClick={handleTryAgain}
+              className="text-sm text-parchment/60 hover:text-parchment underline"
+            >
+              Not what you meant?
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

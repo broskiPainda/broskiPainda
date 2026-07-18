@@ -112,7 +112,7 @@ async def run_pipeline(
 
             yield {"event": "step_started", "data": {"step": 5, "name": "build_base_rate_table"}}
             cow_client = cow_client or CoWDataClient()
-            base_rate_table = build_base_rate_table(scenario, cow_client=cow_client)
+            base_rate_table = build_base_rate_table(scenario.dimensions, cow_client=cow_client)
             yield {
                 "event": "step_completed",
                 "data": {

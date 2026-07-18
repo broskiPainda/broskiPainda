@@ -1,22 +1,31 @@
 """Step 5 — Base rates from real data.
 
 Builds a reference class from the local Correlates of War tables, filtered
-by the scenario's stakes_framing/escalation_position dimensions translated
-into a hostility-level MID filter. Every number in the output table comes
-directly from the CoW dataset — never from the LLM — and the exact filter
-used is included as `query_definition` for transparency.
+by the stakes_framing/escalation_position dimensions of whatever's being
+analyzed — a hypothetical scenario, OR (in the event-analysis mode) an
+already-verified primary historical case, since both ScenarioDimensions and
+CaseDimensions carry the same field names — translated into a
+hostility-level MID filter. Every number in the output table comes directly
+from the CoW dataset — never from the LLM — and the exact filter used is
+included as `query_definition` for transparency.
 
 Limitation (documented in the query definition itself, not hidden): CINC-
 ratio filtering by power_asymmetry requires named real-world states on both
-sides of the dispute. CLIO's scenarios describe generic actors ("a mid-size
-power"), so this reference class is built from the hostility-level filter
-only; a future version could resolve the scenario's actors to CoW state
-codes (via the verified historical analogues' real actor names) to add a
-CINC-ratio filter on top of this.
+sides of the dispute. Hypothetical scenarios describe generic actors ("a
+mid-size power"), so this reference class is built from the hostility-level
+filter only; a future version could resolve to CoW state codes (via the
+verified historical analogues' real actor names) to add a CINC-ratio filter
+on top of this.
 """
+from typing import Protocol
+
 from app.models.report import BaseRateRow, BaseRateTable
-from app.models.scenario import Scenario
 from app.sources.cow import CoWDataClient, CoWDataUnavailableError, MidRecord
+
+
+class _HasStakesAndEscalation(Protocol):
+    stakes_framing: str
+    escalation_position: str
 
 # CoW MIDB 5.0 hostility levels: 1=No militarized action, 2=Threat to use force,
 # 3=Display of force, 4=Use of force, 5=War.
@@ -40,12 +49,14 @@ def _bucket_outcome(mid: MidRecord) -> str:
     return "failed / other outcome"
 
 
-def _stakes_wants_war_level(scenario: Scenario) -> bool:
-    text = f"{scenario.dimensions.stakes_framing} {scenario.dimensions.escalation_position}".lower()
+def _stakes_wants_war_level(dimensions: _HasStakesAndEscalation) -> bool:
+    text = f"{dimensions.stakes_framing} {dimensions.escalation_position}".lower()
     return any(kw in text for kw in ("war", "existential", "total"))
 
 
-def build_base_rate_table(scenario: Scenario, cow_client: CoWDataClient | None = None) -> BaseRateTable:
+def build_base_rate_table(
+    dimensions: _HasStakesAndEscalation, cow_client: CoWDataClient | None = None
+) -> BaseRateTable:
     cow_client = cow_client or CoWDataClient()
 
     if not cow_client.is_available():
@@ -59,7 +70,7 @@ def build_base_rate_table(scenario: Scenario, cow_client: CoWDataClient | None =
             source="Correlates of War",
         )
 
-    war_only = _stakes_wants_war_level(scenario)
+    war_only = _stakes_wants_war_level(dimensions)
     min_hostility = WAR_HOSTILITY_LEVEL if war_only else SUB_WAR_MIN_HOSTILITY
     max_hostility = WAR_HOSTILITY_LEVEL
 
@@ -77,12 +88,12 @@ def build_base_rate_table(scenario: Scenario, cow_client: CoWDataClient | None =
         f"Correlates of War MIDs 5.0, dyadic participant rows, filtered to hostility_level "
         f"between {min_hostility} and {max_hostility} "
         f"({'war-level disputes only' if war_only else 'sub-war and war-level disputes'}), "
-        "derived from the scenario's stakes_framing/escalation_position dimensions. "
+        "derived from the stakes_framing/escalation_position dimensions. "
         "Outcome buckets approximate 'initiator achieved objectives' as CoW outcome code 1 "
         "(victory for side A), 'stalemate' as codes 5-6 (stalemate/compromise), and everything "
         "else as 'failed / other outcome' — CoW does not encode initiator/target roles "
         "directly, so 'side A' is used as a proxy. CINC-ratio filtering by power asymmetry was "
-        "not applied because this scenario's actors are generic, not named real-world states."
+        "not applied because the actors involved are generic, not named real-world states."
     )
 
     if not mids:
