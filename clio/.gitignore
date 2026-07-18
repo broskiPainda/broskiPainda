@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Secrets
+.env
+backend/.env
+
+# Data (downloaded/generated at setup or runtime)
+data/cow/*.zip
+data/cow/*.csv
+data/*.db
+data/chroma/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
